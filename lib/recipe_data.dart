@@ -8,8 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 class RecipeData {
-  static const String apiKey = '';
-  static final model = GenerativeModel(model: 'gemini-pro', apiKey: apiKey);
+  static const String apiKey = 'AIzaSyDwPAAlMpfzV05aTLBesWC8JLQWHnoNInM';
+  static final model =
+      GenerativeModel(model: 'gemini-1.5-flash', apiKey: apiKey);
   static final uuid = Uuid();
   static final Map<int, dynamic> _recipeCache = {};
   static final Map<String, String> _imageCache = {};
@@ -99,66 +100,125 @@ class RecipeData {
 
   static Future<List<dynamic>> generateRecipesWithAI(String query) async {
     final prompt = '''
-    Generate 3 recipes based on the following input: "$query".
-    For each recipe, provide the following information in JSON format:
-    {
-      "name": "Recipe Name",
-      "ingredients": ["Ingredient 1", "Ingredient 2", ...],
-      "instructions": ["Step 1", "Step 2", ...],
-      "prepTimeMinutes": 30,
-      "caloriesPerServing": 300
-    }
-    Provide only the JSON output, without any additional text.
+    Based on the input "$query", generate 2 unique recipes. Each recipe should have the following structure:
+    
+    Recipe Name: <Recipe Name>
+    Ingredients:
+    - Ingredient 1
+    - Ingredient 2
+    ...
+    Instructions:
+    1. Step 1
+    2. Step 2
+    ...
+    Prep Time: <prep time in minutes>
+    Calories per Serving: <calories>
+    
+    Please return 2 recipes in this exact format. Do not add headers like "Recipe 1" or "##". DO NOT ADD ANYTHING ELSE THAT IS NOT CONTAINED IN THE FORMAT, YOU SHOULD RESPOND WITH FOLLOWING FORMAT!!
     ''';
+
     final content = [Content.text(prompt)];
     final response = await model.generateContent(content);
     final responseText = response.text;
-    print(responseText);
+
     if (responseText != null) {
       try {
-        String cleanedResponse = responseText
-            .replaceAll(RegExp(r'```json'), '')
-            .replaceAll(RegExp(r'```'), '');
-        cleanedResponse = cleanedResponse.replaceAll(RegExp(r'}\s*{'), '},{');
-        final jsonString = '[$cleanedResponse]';
-        final List<dynamic> recipes = jsonDecode(jsonString);
-        if (recipes is List) {
-          List<Future<String>> imageFetchFutures = [];
-          for (var recipe in recipes) {
-            String recipeName = recipe['name'] ?? 'Recipe';
-            imageFetchFutures.add(fetchImageForRecipe(recipeName));
+        final RegExp recipePattern =
+            RegExp(r'Recipe Name:.*?(?=Recipe Name:|$)', dotAll: true);
+        final List<String> recipeMatches = recipePattern
+            .allMatches(responseText)
+            .map((match) => match.group(0) ?? '')
+            .toList();
+
+        List<dynamic> recipes = [];
+
+        for (String recipeString in recipeMatches) {
+          if (recipeString.trim().isEmpty) continue;
+
+          final recipe = _parseRecipeText(recipeString.trim());
+          if (recipe != null) {
+            recipes.add(recipe);
           }
-          List<String> imageUrls = await Future.wait(imageFetchFutures);
-          List<dynamic> processedRecipes = [];
-          for (int i = 0; i < recipes.length; i++) {
-            var recipe = recipes[i];
-            int prepTimeMinutes =
-                int.tryParse(recipe['prepTimeMinutes'].toString()) ?? 0;
-            int caloriesPerServing =
-                int.tryParse(recipe['caloriesPerServing'].toString()) ?? 0;
-            processedRecipes.add({
-              'id': uuid.v4(),
-              'name': recipe['name'],
-              'ingredients': recipe['ingredients'] ?? [],
-              'instructions': recipe['instructions'] ?? [],
-              'prepTimeMinutes': prepTimeMinutes,
-              'caloriesPerServing': caloriesPerServing,
-              'image': imageUrls[i],
-            });
-          }
-          _queryCache[query] = processedRecipes;
-          await saveCache();
-          return processedRecipes;
-        } else {
-          throw Exception(
-              'Expected a list of recipes, but received something else.');
         }
+
+        recipes = recipes.take(2).toList();
+
+        List<Future<String>> imageFetchFutures = recipes.map((recipe) {
+          return fetchImageForRecipe(recipe['name']);
+        }).toList();
+
+        List<String> imageUrls = await Future.wait(imageFetchFutures);
+
+        for (int i = 0; i < recipes.length; i++) {
+          recipes[i]['image'] = imageUrls[i];
+        }
+
+        _queryCache[query] = recipes;
+        await saveCache();
+        return recipes;
       } catch (e) {
-        print("Error while parsing JSON: $e");
-        throw Exception('Invalid JSON format received from AI');
+        print("Error while parsing recipe text: $e");
+        throw Exception('Invalid recipe format received from AI');
       }
     } else {
       throw Exception('Failed to generate recipes with AI');
+    }
+  }
+
+  static Map<String, dynamic>? _parseRecipeText(String recipeText) {
+    try {
+      final lines = recipeText.split('\n');
+      String name = '';
+      List<String> ingredients = [];
+      List<String> instructions = [];
+      int prepTimeMinutes = 0;
+      int caloriesPerServing = 0;
+
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith('Recipe Name:')) {
+          name = lines[i].replaceFirst('Recipe Name:', '').trim();
+        } else if (lines[i].startsWith('Ingredients:')) {
+          for (int j = i + 1; j < lines.length; j++) {
+            if (lines[j].startsWith('Instructions:')) {
+              i = j - 1;
+              break;
+            }
+            ingredients.add(lines[j].trim().replaceFirst('- ', ''));
+          }
+        } else if (lines[i].startsWith('Instructions:')) {
+          for (int j = i + 1; j < lines.length; j++) {
+            if (lines[j].startsWith('Prep Time:')) {
+              i = j - 1;
+              break;
+            }
+            instructions
+                .add(lines[j].trim().replaceFirst(RegExp(r'^\d+\.\s'), ''));
+          }
+        } else if (lines[i].startsWith('Prep Time:')) {
+          final prepTimeString = lines[i]
+              .replaceFirst('Prep Time:', '')
+              .replaceAll('minutes', '')
+              .trim();
+          prepTimeMinutes = int.tryParse(prepTimeString) ?? 0;
+        } else if (lines[i].startsWith('Calories per Serving:')) {
+          caloriesPerServing = int.tryParse(
+                  lines[i].replaceFirst('Calories per Serving:', '').trim()) ??
+              0;
+        }
+      }
+
+      name = name.replaceAll(RegExp(r'\*\*|##'), '').trim();
+
+      return {
+        'name': name,
+        'ingredients': ingredients.isEmpty ? ['N/A'] : ingredients,
+        'instructions': instructions.isEmpty ? ['N/A'] : instructions,
+        'prepTimeMinutes': prepTimeMinutes,
+        'caloriesPerServing': caloriesPerServing
+      };
+    } catch (e) {
+      print("Error while parsing recipe text: $e");
+      return null;
     }
   }
 

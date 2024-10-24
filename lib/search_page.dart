@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 import 'detail_page.dart';
 import 'recipe_data.dart';
@@ -54,17 +56,6 @@ class _SearchPageState extends State<SearchPage> {
     });
   }
 
-  Future<String> _getImage(String imageUrl, String recipeId) async {
-    // Cek apakah gambar sudah ada di lokal
-    String? localImagePath = await RecipeData.getLocalImagePath(recipeId);
-
-    if (localImagePath != null) {
-      return localImagePath;
-    }
-
-    return await RecipeData.downloadAndSaveImage(imageUrl, recipeId);
-  }
-
   void _searchRecipes(String query) async {
     setState(() {
       _isLoading = true;
@@ -94,6 +85,53 @@ class _SearchPageState extends State<SearchPage> {
         _isOffline = true;
       });
     }
+  }
+
+  Future<void> _downloadImage(String url, String fileName) async {
+    try {
+      final response = await http.get(Uri.parse(url));
+      final documentDirectory = await getApplicationDocumentsDirectory();
+      final file = File('${documentDirectory.path}/$fileName');
+
+      // Save the image bytes to the local file
+      file.writeAsBytesSync(response.bodyBytes);
+    } catch (e) {
+      print('Error downloading image: $e');
+    }
+  }
+
+  Future<String?> _getLocalImagePath(String fileName) async {
+    final documentDirectory = await getApplicationDocumentsDirectory();
+    final filePath = '${documentDirectory.path}/$fileName';
+
+    // Check if the file exists locally
+    if (File(filePath).existsSync()) {
+      return filePath;
+    } else {
+      return null;
+    }
+  }
+
+  Widget _buildRecipeImage(String imageUrl, String recipeName) {
+    final fileName = imageUrl.split('/').last;
+
+    return FutureBuilder<String?>(
+      future: _getLocalImagePath(fileName),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done) {
+          if (snapshot.data != null) {
+            // Display the image from local storage
+            return Image.file(File(snapshot.data!), fit: BoxFit.cover);
+          } else {
+            // Download and save the image if not found locally
+            _downloadImage(imageUrl, fileName);
+            return Image.network(imageUrl, fit: BoxFit.cover);
+          }
+        } else {
+          return const Center(child: CircularProgressIndicator());
+        }
+      },
+    );
   }
 
   @override
@@ -165,85 +203,71 @@ class _SearchPageState extends State<SearchPage> {
                           itemCount: recipes.length,
                           itemBuilder: (context, index) {
                             final recipe = recipes[index];
-                            return FutureBuilder<String>(
-                              future: _getImage(
-                                  recipe['image'], recipe['id'].toString()),
-                              builder: (context, imageSnapshot) {
-                                if (imageSnapshot.connectionState ==
-                                    ConnectionState.waiting) {
-                                  return const Center(
-                                      child: CircularProgressIndicator());
-                                } else if (imageSnapshot.hasError) {
-                                  return const Center(
-                                      child: Text('Failed to load image.'));
-                                } else {
-                                  final imagePath = imageSnapshot.data!;
-                                  return GestureDetector(
-                                    onTap: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) => DetailPage(
-                                            recipeData: recipe,
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                    child: Card(
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(16),
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
-                                        children: [
-                                          Expanded(
-                                            child: ClipRRect(
-                                              borderRadius:
-                                                  const BorderRadius.vertical(
-                                                      top: Radius.circular(16)),
-                                              child: Image.file(
-                                                File(imagePath),
+                            final imageUrl = recipe['image'];
+                            return GestureDetector(
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        DetailPage(recipeData: recipe),
+                                  ),
+                                );
+                              },
+                              child: Card(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(
+                                      child: ClipRRect(
+                                        borderRadius:
+                                            const BorderRadius.vertical(
+                                                top: Radius.circular(16)),
+                                        child: imageUrl != null
+                                            ? _buildRecipeImage(
+                                                imageUrl, recipe['name'])
+                                            : Image.network(
+                                                'https://via.placeholder.com/150',
                                                 fit: BoxFit.cover,
                                               ),
+                                      ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.all(8.0),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            recipe['name'],
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
                                             ),
                                           ),
-                                          Padding(
-                                            padding: const EdgeInsets.all(8.0),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  recipe['name'],
-                                                  style: const TextStyle(
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 16,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 4),
-                                                const Text('Best Recipe'),
-                                                const SizedBox(height: 8),
-                                                Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment
-                                                          .spaceBetween,
-                                                  children: [
-                                                    Text(
-                                                        '${recipe['caloriesPerServing']?.toString() ?? 'N/A'} Kcal'),
-                                                    Text(
-                                                        '${recipe['prepTimeMinutes']?.toString() ?? 'N/A'} min'),
-                                                  ],
-                                                ),
-                                              ],
-                                            ),
+                                          const SizedBox(height: 4),
+                                          const Text('Best Recipe'),
+                                          const SizedBox(height: 8),
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text(
+                                                  '${recipe['caloriesPerServing']?.toString() ?? 'N/A'} Kcal'),
+                                              Text(
+                                                  '${recipe['prepTimeMinutes']?.toString() ?? 'N/A'} min'),
+                                            ],
                                           ),
                                         ],
                                       ),
                                     ),
-                                  );
-                                }
-                              },
+                                  ],
+                                ),
+                              ),
                             );
                           },
                         );
