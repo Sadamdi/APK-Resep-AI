@@ -1,23 +1,23 @@
 import 'package:flutter/material.dart';
 
 import 'landing_page.dart';
+import 'recipe_data.dart';
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await RecipeData.loadCache();
+  runApp(MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Recipe App',
+      title: 'Tastify',
       theme: ThemeData(
         primarySwatch: Colors.teal,
       ),
-      home: const LandingPage(),
+      home: LandingPage(),
     );
   }
 }
